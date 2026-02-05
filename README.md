@@ -22,6 +22,7 @@ No installation required. The application uses Python's standard library (tkinte
 ## Usage
 
 1. **Start the application**:
+
    ```bash
    python3 lap_time_control.py
    ```
@@ -68,14 +69,14 @@ A sample file `runners_sample.csv` is provided.
 Lap times are saved to a CSV file with the following format:
 
 ```csv
-timestamp,race_number,hallway,gender,lap_number,total_laps
-2024-01-15 10:30:45.123,101,Nybrogård A,M,1,10
-2024-01-15 10:35:20.456,102,Nybrogård A,F,1,10
+timestamp,race_number,hallway,gender,lap1,lap2, ... ,finish_time
+2026-02-05 18:26:02.578,101,Nybrogård A,M,00:00:12.900,00:00:26.284, ... , 00:01:26.284
 ```
 
 ## Backups
 
 Backups are automatically created:
+
 - Every 10 recorded laps
 - When the race is stopped
 

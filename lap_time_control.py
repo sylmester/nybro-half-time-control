@@ -30,6 +30,9 @@ class LapTimeControl:
         self.runners_file = None
         self.output_file = None
         self.backup_counter = 0
+        self.race_start_time = None
+        self.race_start_timestamp = None
+        self.runner_laps = {}  # race_number -> list of elapsed lap times (HH:MM:SS.mmm)
         
         # Create GUI
         self.create_widgets()
@@ -38,8 +41,31 @@ class LapTimeControl:
     def create_widgets(self):
         """Create all GUI widgets."""
         
+        # Main padded container to give edge padding
+        self.main_container = ttk.Frame(self.root, padding=10)
+        self.main_container.pack(fill=tk.BOTH, expand=True)
+
+        # Configure ttk styles for colored buttons (macOS-friendly using 'clam' theme)
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use('clam')
+        except Exception:
+            pass
+        style.configure('Success.TButton', foreground='white', background='#28a745', padding=6)
+        style.map('Success.TButton',
+                  background=[('active', '#218838'), ('pressed', '#1e7e34')],
+                  foreground=[('disabled', '#cccccc')])
+        style.configure('Danger.TButton', foreground='white', background='#dc3545', padding=6)
+        style.map('Danger.TButton',
+                  background=[('active', '#c82333'), ('pressed', '#bd2130')],
+                  foreground=[('disabled', '#cccccc')])
+        style.configure('Primary.TButton', foreground='white', background='#007bff', padding=6)
+        style.map('Primary.TButton',
+                  background=[('active', '#0056b3'), ('pressed', '#004085')],
+                  foreground=[('disabled', '#cccccc')])
+
         # Top frame - Configuration
-        config_frame = ttk.LabelFrame(self.root, text="Race Configuration", padding=10)
+        config_frame = ttk.LabelFrame(self.main_container, text="Race Configuration", padding=10)
         config_frame.pack(fill=tk.X, padx=10, pady=5)
         
         # Total laps
@@ -60,23 +86,31 @@ class LapTimeControl:
         self.runners_label.grid(row=0, column=5, padx=5)
         
         # Control frame - Start/Stop
-        control_frame = ttk.LabelFrame(self.root, text="Race Control", padding=10)
+        control_frame = ttk.LabelFrame(self.main_container, text="Race Control", padding=10)
         control_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        self.start_button = ttk.Button(control_frame, text="Start Race", 
-                                       command=self.start_race, width=15)
+        # Colored buttons using ttk with custom styles
+        self.start_button = ttk.Button(control_frame, text="Start Race",
+                           command=self.start_race, width=15, style='Success.TButton')
         self.start_button.pack(side=tk.LEFT, padx=5)
         
-        self.stop_button = ttk.Button(control_frame, text="Stop Race", 
-                                      command=self.stop_race, width=15, state=tk.DISABLED)
+        self.stop_button = ttk.Button(control_frame, text="Stop Race",
+                          command=self.stop_race, width=15, state=tk.DISABLED, style='Danger.TButton')
         self.stop_button.pack(side=tk.LEFT, padx=5)
+
+        
         
         self.race_status_label = ttk.Label(control_frame, text="Race Status: Not Started", 
                                           font=('Arial', 10, 'bold'))
         self.race_status_label.pack(side=tk.LEFT, padx=20)
+
+        # Race timer label
+        self.race_timer_label = ttk.Label(control_frame, text="Race Time: 00:00:00", 
+                                          font=('Arial', 12, 'bold'))
+        self.race_timer_label.pack(side=tk.RIGHT, padx=10)
         
         # Input frame - Enter race numbers
-        input_frame = ttk.LabelFrame(self.root, text="Record Lap Time", padding=10)
+        input_frame = ttk.LabelFrame(self.main_container, text="Record Lap Time", padding=10)
         input_frame.pack(fill=tk.X, padx=10, pady=5)
         
         ttk.Label(input_frame, text="Race Number:").pack(side=tk.LEFT, padx=5)
@@ -86,11 +120,12 @@ class LapTimeControl:
         self.race_number_entry.pack(side=tk.LEFT, padx=5)
         self.race_number_entry.bind('<Return>', lambda e: self.record_lap_time())
         
-        ttk.Button(input_frame, text="Record Lap", 
-                  command=self.record_lap_time).pack(side=tk.LEFT, padx=5)
+        self.record_button = ttk.Button(input_frame, text="Record Lap",
+                        command=self.record_lap_time, style='Primary.TButton')
+        self.record_button.pack(side=tk.LEFT, padx=5)
         
         # Info frame - Show runner info
-        info_frame = ttk.LabelFrame(self.root, text="Runner Information", padding=10)
+        info_frame = ttk.LabelFrame(self.main_container, text="Runner Information", padding=10)
         info_frame.pack(fill=tk.X, padx=10, pady=5)
         
         self.runner_info_label = ttk.Label(info_frame, text="Enter a race number to see runner details", 
@@ -98,25 +133,36 @@ class LapTimeControl:
         self.runner_info_label.pack()
         
         # Log frame - Event log
-        log_frame = ttk.LabelFrame(self.root, text="Event Log", padding=10)
+        log_frame = ttk.LabelFrame(self.main_container, text="Event Log", padding=10)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=15, width=80, 
-                                                  font=('Courier', 9))
+                                                  font=('Courier', 12))
         self.log_text.pack(fill=tk.BOTH, expand=True)
         self.log_text.config(state=tk.DISABLED)
+        # Tag for error/wrong number entries
+        self.log_text.tag_config('error', foreground='red')
         
         # Status bar
         self.status_bar = ttk.Label(self.root, text="Ready", relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
         
-    def log_event(self, message):
+    def log_event(self, message, color=None):
         """Log an event to the GUI log."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_message = f"[{timestamp}] {message}\n"
         
         self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, log_message)
+        if color:
+            # Ensure tag exists; use provided color name as tag
+            try:
+                self.log_text.insert(tk.END, log_message, (color,))
+            except tk.TclError:
+                # Fallback: configure tag dynamically and insert
+                self.log_text.tag_config(color, foreground=color)
+                self.log_text.insert(tk.END, log_message, (color,))
+        else:
+            self.log_text.insert(tk.END, log_message)
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
         
@@ -175,15 +221,20 @@ class LapTimeControl:
         # Create output file
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.output_file = f"lap_times_{timestamp}.csv"
+        self.race_start_time = datetime.now()
+        self.race_start_timestamp = self.race_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         
-        # Initialize output file
+        # Initialize output file with new header: timestamp,race_number,hallway,gender,lap1..lapN,finish_time
+        header = ['timestamp', 'race_number', 'hallway', 'gender'] + \
+                 [f'lap{i}' for i in range(1, self.total_laps + 1)] + ['finish_time']
         with open(self.output_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['timestamp', 'race_number', 'hallway', 'gender', 'lap_number', 'total_laps'])
+            writer.writerow(header)
         
         self.race_active = True
         self.lap_times = []
         self.backup_counter = 0
+        self.runner_laps = {}
         
         # Reset lap counts
         for runner in self.runners.values():
@@ -192,6 +243,8 @@ class LapTimeControl:
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.race_status_label.config(text="Race Status: ACTIVE", foreground="green")
+        self.race_timer_label.config(text="Race Time: 00:00:00")
+        self.update_timer()
         
         self.log_event(f"Race started - {self.total_laps} laps x {self.lap_length} km")
         self.log_event(f"Output file: {self.output_file}")
@@ -229,7 +282,7 @@ class LapTimeControl:
             
         if race_number not in self.runners:
             messagebox.showwarning("Warning", f"Race number {race_number} not found")
-            self.log_event(f"WARNING: Unknown race number: {race_number}")
+            self.log_event(f"WARNING: Unknown race number: {race_number}", color='error')
             self.race_number_var.set("")
             return
             
@@ -244,36 +297,26 @@ class LapTimeControl:
             self.race_number_var.set("")
             return
             
-        # Record lap time
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        lap_record = {
-            'timestamp': timestamp,
+        # Record lap elapsed time since race start
+        now = datetime.now()
+        elapsed_str = self._format_elapsed(now - self.race_start_time)
+        self.runner_laps.setdefault(race_number, []).append(elapsed_str)
+        
+        # Track for backup cadence
+        self.lap_times.append({
+            'timestamp': now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
             'race_number': race_number,
-            'hallway': runner['hallway'],
-            'gender': runner['gender'],
-            'lap_number': runner['laps'],
-            'total_laps': self.total_laps
-        }
+            'lap_number': runner['laps']
+        })
         
-        self.lap_times.append(lap_record)
-        
-        # Save to file
-        with open(self.output_file, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                lap_record['timestamp'],
-                lap_record['race_number'],
-                lap_record['hallway'],
-                lap_record['gender'],
-                lap_record['lap_number'],
-                lap_record['total_laps']
-            ])
+        # Save entire CSV in new format
+        self.save_results_csv()
         
         # Update UI
         finish_text = " - FINISHED!" if runner['laps'] == self.total_laps else ""
         self.runner_info_label.config(
             text=f"Runner #{race_number} ({runner['hallway']}, {runner['gender']}) - "
-                 f"Lap {runner['laps']}/{self.total_laps}{finish_text}"
+                 f"Lap {runner['laps']}/{self.total_laps} at {elapsed_str}{finish_text}"
         )
         
         self.log_event(f"Recorded: Runner #{race_number} - Lap {runner['laps']}/{self.total_laps}{finish_text}")
@@ -303,6 +346,50 @@ class LapTimeControl:
             
         except Exception as e:
             self.log_event(f"ERROR: Backup failed: {str(e)}")
+
+    def _format_elapsed(self, delta):
+        """Format a timedelta as HH:MM:SS.mmm"""
+        total_ms = int(delta.total_seconds() * 1000)
+        hours = total_ms // (3600 * 1000)
+        minutes = (total_ms // (60 * 1000)) % 60
+        seconds = (total_ms // 1000) % 60
+        ms = total_ms % 1000
+        return f"{hours:02}:{minutes:02}:{seconds:02}.{ms:03}"
+
+    def update_timer(self):
+        """Update race timer label while race is active."""
+        if self.race_active and self.race_start_time:
+            now = datetime.now()
+            elapsed_str = self._format_elapsed(now - self.race_start_time)
+            self.race_timer_label.config(text=f"Race Time: {elapsed_str}")
+            # Refresh ~10 times per second
+            self.root.after(100, self.update_timer)
+
+    def save_results_csv(self):
+        """Rewrite the CSV with header and per-runner lap columns."""
+        if not self.output_file:
+            return
+        header = (
+            ['timestamp', 'race_number', 'hallway', 'gender'] +
+            [f'lap{i}' for i in range(1, self.total_laps + 1)] + ['finish_time']
+        )
+        try:
+            with open(self.output_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(header)
+                for race_number, laps in self.runner_laps.items():
+                    runner = self.runners.get(race_number, {})
+                    hallway = runner.get('hallway', '')
+                    gender = runner.get('gender', '')
+                    row = [self.race_start_timestamp, race_number, hallway, gender]
+                    # Add lap columns padded to total_laps
+                    lap_cols = laps[:self.total_laps] + [''] * max(0, self.total_laps - len(laps))
+                    row.extend(lap_cols)
+                    finish_time = laps[self.total_laps - 1] if len(laps) >= self.total_laps else ''
+                    row.append(finish_time)
+                    writer.writerow(row)
+        except Exception as e:
+            self.log_event(f"ERROR: Failed to save CSV: {str(e)}")
 
 
 def main():
